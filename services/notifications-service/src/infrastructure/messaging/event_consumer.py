@@ -117,12 +117,14 @@ async def process_ticket_event(message: aio_pika.IncomingMessage):
 
             # Generar contenido de la notificación usando el template
             short_id = payload.get("id", "")[:8]
-            subject = template["subject"].format(id=short_id, **payload)
-            body = template["body"].format(id=short_id, **{
+            format_vars = {
+                "id": short_id,
                 "customer_name": payload.get("customer_name", "Cliente"),
                 "subject": payload.get("subject", ""),
                 "assigned_agent_name": payload.get("assigned_agent_name", ""),
-            })
+            }
+            subject = template["subject"].format(**format_vars)
+            body = template["body"].format(**format_vars)
 
             # Persistir la notificación
             async with AsyncSessionLocal() as session:
