@@ -24,13 +24,30 @@
     "procesar un evento, el mensaje va a la DLX en vez de perderse.",
     "============================================================================="
   ],
+  "users": [
+    {
+      "__comment": "Usuario principal de la plataforma. El hash es SHA256 de 'cs_platform_2024'. El tag 'administrator' permite acceso al Management UI para monitoreo.",
+      "name": "cs_platform",
+      "password_hash": "+FTnQ8fZoP2npFP0Ge58VyhGitWD0AL6+kPKbVQ8QStOt4zu",
+      "hashing_algorithm": "rabbit_password_hashing_sha256",
+      "tags": ["administrator"]
+    }
+  ],
   "vhosts": [
     {
       "name": "customer_service"
     }
   ],
-  "users": [],
-  "permissions": [],
+  "permissions": [
+    {
+      "__comment": "Permiso para que cs_platform acceda al vhost customer_service. Sin esto, el usuario creado por RABBITMQ_DEFAULT_USER no puede operar en este vhost cuando definitions.json se carga (sobrescribe la configuración de env vars).",
+      "user": "cs_platform",
+      "vhost": "customer_service",
+      "configure": ".*",
+      "write": ".*",
+      "read": ".*"
+    }
+  ],
   "exchanges": [
     {
       "__comment": "Exchange principal para todos los eventos de dominio. Tipo 'topic' permite routing flexible con wildcards (ej: ticket.* matchea ticket.created, ticket.assigned, etc.)",
