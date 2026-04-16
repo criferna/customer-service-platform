@@ -334,7 +334,7 @@ services:
       RABBITMQ_URL: amqp://${RABBITMQ_USER:-cs_platform}:${RABBITMQ_PASS:-cs_platform_2024}@rabbitmq:5672/customer_service
       LOG_LEVEL: info
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8080/health"]
       interval: 15s
       timeout: 5s
       retries: 3
