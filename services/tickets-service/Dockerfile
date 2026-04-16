@@ -16,8 +16,8 @@ FROM node:20-alpine AS builder
 WORKDIR /build
 
 # Instalar dependencias primero (aprovecha Docker layer cache)
-COPY package.json package-lock.json* ./
-RUN npm ci --only=production
+COPY package.json ./
+RUN npm install --omit=dev
 
 # --- Stage 2: Runtime ---
 FROM node:20-alpine

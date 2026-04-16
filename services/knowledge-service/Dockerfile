@@ -20,12 +20,12 @@ FROM golang:1.22-alpine AS builder
 WORKDIR /build
 
 # Copiar archivos de módulos primero (cache de dependencias)
-COPY go.mod go.sum ./
-RUN go mod download
+COPY go.mod ./
+RUN go mod download 2>/dev/null || true
 
-# Copiar código fuente y compilar
+# Copiar código fuente, resolver dependencias y compilar
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -o /knowledge-service ./cmd/main.go
+RUN go mod tidy && CGO_ENABLED=0 GOOS=linux go build -o /knowledge-service ./cmd/main.go
 
 # --- Stage 2: Runtime ---
 # Usamos alpine en vez de scratch para tener wget (healthcheck)
