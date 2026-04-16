@@ -1,0 +1,402 @@
+# =============================================================================
+# Docker Compose - Customer Service Platform (Microservices Lab)
+# =============================================================================
+# Orquestación completa de la plataforma de servicio al cliente.
+#
+# PATRONES IMPLEMENTADOS:
+#   - Database per Service: Cada microservicio tiene su propia instancia PostgreSQL
+#   - API Gateway: Kong como punto de entrada único
+#   - Event-Driven Architecture: RabbitMQ como Event Bus
+#   - Service Discovery: Docker DNS interno
+#   - Auto-Recovery: restart policies + health checks
+#   - Observabilidad: métricas Prometheus en cada servicio
+#
+# USO:
+#   docker compose up -d                    # Levantar todo
+#   docker compose up -d --scale tickets-service=3  # Escalar tickets a 3 instancias
+#   docker compose ps                       # Ver estado
+#   docker compose logs -f tickets-service  # Ver logs de un servicio
+# =============================================================================
+
+# ------------------------------------------------------------------------------
+# Red aislada para el lab de microservicios.
+# Todos los contenedores se comunican por nombre de servicio (Docker DNS).
+# No interfiere con las redes existentes (monitoring_monitoring, alimentos-la-casona_default).
+# ------------------------------------------------------------------------------
+networks:
+  microservices-lab:
+    driver: bridge
+    name: microservices-lab
+
+# ------------------------------------------------------------------------------
+# Volúmenes persistentes para cada base de datos.
+# Cada servicio tiene su propio volumen — si un servicio se elimina, su data persiste.
+# Esto demuestra el patrón "Database per Service": aislamiento total de datos.
+# ------------------------------------------------------------------------------
+volumes:
+  customers-db-data:
+  tickets-db-data:
+  knowledge-db-data:
+  notifications-db-data:
+  agents-db-data:
+  rabbitmq-data:
+  kong-db-data:
+
+services:
+
+  # ============================================================================
+  # CAPA DE INFRAESTRUCTURA - Event Bus
+  # ============================================================================
+  # RabbitMQ actúa como el Event Bus central del sistema.
+  # Los microservicios publican eventos de dominio (ej: ticket.created) y otros
+  # servicios los consumen de forma asíncrona. Esto implementa:
+  #   - Patrón Event-Driven Architecture
+  #   - Consistencia Eventual entre servicios
+  #   - Desacoplamiento: el productor no conoce a los consumidores
+  # ============================================================================
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: cs-rabbitmq
+    restart: unless-stopped
+    networks:
+      - microservices-lab
+    ports:
+      - "5672:5672"     # AMQP - protocolo de mensajería
+      - "15672:15672"   # Management UI - http://192.168.0.125:15672
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-cs_platform}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASS:-cs_platform_2024}
+      RABBITMQ_DEFAULT_VHOST: customer_service
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+      - ./rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
+      - ./rabbitmq/definitions.json:/etc/rabbitmq/definitions.json:ro
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # ============================================================================
+  # CAPA DE INFRAESTRUCTURA - API Gateway (Kong)
+  # ============================================================================
+  # Kong actúa como punto de entrada único para todos los clientes.
+  # Implementa:
+  #   - Patrón API Gateway: routing centralizado a microservicios
+  #   - Rate Limiting: protección contra abuso
+  #   - Load Balancing: distribuye carga entre instancias (cuando se escala)
+  #   - Correlation ID: inyecta X-Correlation-ID para tracing distribuido
+  #   - Modo DB-less: configuración declarativa (IaC)
+  # ============================================================================
+  kong:
+    image: kong:3.7-alpine
+    container_name: cs-kong
+    restart: unless-stopped
+    networks:
+      - microservices-lab
+    ports:
+      - "8000:8000"     # Proxy HTTP  - http://192.168.0.125:8000
+      - "8443:8443"     # Admin API   - http://192.168.0.125:8443
+    environment:
+      KONG_DATABASE: "off"                          # Modo DB-less (declarativo / IaC)
+      KONG_DECLARATIVE_CONFIG: /etc/kong/kong.yml   # Configuración como código
+      KONG_PROXY_LISTEN: "0.0.0.0:8000"
+      KONG_ADMIN_LISTEN: "0.0.0.0:8443"
+      KONG_LOG_LEVEL: info
+      KONG_PROXY_ACCESS_LOG: /dev/stdout
+      KONG_PROXY_ERROR_LOG: /dev/stderr
+      KONG_ADMIN_ACCESS_LOG: /dev/stdout
+      KONG_ADMIN_ERROR_LOG: /dev/stderr
+    volumes:
+      - ./kong/kong.yml:/etc/kong/kong.yml:ro
+    healthcheck:
+      test: ["CMD", "kong", "health"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 15s
+    depends_on:
+      customers-service:
+        condition: service_healthy
+      tickets-service:
+        condition: service_healthy
+      knowledge-service:
+        condition: service_healthy
+      notifications-service:
+        condition: service_healthy
+      agents-service:
+        condition: service_healthy
+
+  # ============================================================================
+  # CAPA DE DATOS - Base de Datos por Servicio
+  # ============================================================================
+  # Cada microservicio tiene su propia instancia PostgreSQL.
+  # Esto implementa el patrón "Database per Service":
+  #   - Aislamiento total: un servicio NO puede acceder a la BD de otro
+  #   - Autonomía: cada servicio elige su schema sin afectar a otros
+  #   - Resiliencia: si una BD cae, solo afecta a su servicio
+  #   - Escalamiento independiente de storage por servicio
+  #
+  # En producción, estas serían instancias RDS/Cloud SQL separadas.
+  # Para el lab, usamos contenedores PostgreSQL independientes.
+  # ============================================================================
+
+  # --- Base de datos del servicio de Clientes ---
+  customers-db:
+    image: postgres:16-alpine
+    container_name: cs-customers-db
+    restart: unless-stopped
+    networks:
+      - microservices-lab
+    environment:
+      POSTGRES_DB: cs_customers
+      POSTGRES_USER: customers_svc
+      POSTGRES_PASSWORD: ${CUSTOMERS_DB_PASS:-cust_secret_2024}
+    volumes:
+      - customers-db-data:/var/lib/postgresql/data
+      - ./postgres/customers-init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U customers_svc -d cs_customers"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # --- Base de datos del servicio de Tickets ---
+  tickets-db:
+    image: postgres:16-alpine
+    container_name: cs-tickets-db
+    restart: unless-stopped
+    networks:
+      - microservices-lab
+    environment:
+      POSTGRES_DB: cs_tickets
+      POSTGRES_USER: tickets_svc
+      POSTGRES_PASSWORD: ${TICKETS_DB_PASS:-tick_secret_2024}
+    volumes:
+      - tickets-db-data:/var/lib/postgresql/data
+      - ./postgres/tickets-init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tickets_svc -d cs_tickets"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # --- Base de datos del servicio de Knowledge Base ---
+  knowledge-db:
+    image: postgres:16-alpine
+    container_name: cs-knowledge-db
+    restart: unless-stopped
+    networks:
+      - microservices-lab
+    environment:
+      POSTGRES_DB: cs_knowledge
+      POSTGRES_USER: knowledge_svc
+      POSTGRES_PASSWORD: ${KNOWLEDGE_DB_PASS:-know_secret_2024}
+    volumes:
+      - knowledge-db-data:/var/lib/postgresql/data
+      - ./postgres/knowledge-init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U knowledge_svc -d cs_knowledge"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # --- Base de datos del servicio de Notificaciones ---
+  notifications-db:
+    image: postgres:16-alpine
+    container_name: cs-notifications-db
+    restart: unless-stopped
+    networks:
+      - microservices-lab
+    environment:
+      POSTGRES_DB: cs_notifications
+      POSTGRES_USER: notifications_svc
+      POSTGRES_PASSWORD: ${NOTIFICATIONS_DB_PASS:-noti_secret_2024}
+    volumes:
+      - notifications-db-data:/var/lib/postgresql/data
+      - ./postgres/notifications-init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U notifications_svc -d cs_notifications"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # --- Base de datos del servicio de Agentes ---
+  agents-db:
+    image: postgres:16-alpine
+    container_name: cs-agents-db
+    restart: unless-stopped
+    networks:
+      - microservices-lab
+    environment:
+      POSTGRES_DB: cs_agents
+      POSTGRES_USER: agents_svc
+      POSTGRES_PASSWORD: ${AGENTS_DB_PASS:-agen_secret_2024}
+    volumes:
+      - agents-db-data:/var/lib/postgresql/data
+      - ./postgres/agents-init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agents_svc -d cs_agents"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ============================================================================
+  # CAPA DE MICROSERVICIOS
+  # ============================================================================
+  # Cada servicio:
+  #   - Tiene su propia BD (patrón Database per Service)
+  #   - Se conecta al Event Bus para comunicación asíncrona
+  #   - Expone /health para auto-recovery y /metrics para observabilidad
+  #   - Usa Docker DNS para descubrir otros servicios (Service Discovery)
+  #   - Se puede escalar horizontalmente: docker compose up --scale <service>=N
+  #
+  # NO se exponen puertos al host directamente — todo el tráfico
+  # entra por el API Gateway (Kong). Esto demuestra el patrón Gateway.
+  # ============================================================================
+
+  # --- Customers Service (Python / FastAPI) ---
+  # Bounded Context: Gestión de Clientes
+  # Responsabilidad: CRUD de clientes, publicación de eventos de dominio
+  customers-service:
+    build:
+      context: ../services/customers-service
+      dockerfile: Dockerfile
+    image: cs-platform/customers-service:latest
+    restart: unless-stopped
+    networks:
+      - microservices-lab
+    environment:
+      SERVICE_NAME: customers-service
+      DATABASE_URL: postgresql://customers_svc:${CUSTOMERS_DB_PASS:-cust_secret_2024}@customers-db:5432/cs_customers
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-cs_platform}:${RABBITMQ_PASS:-cs_platform_2024}@rabbitmq:5672/customer_service
+      LOG_LEVEL: INFO
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    depends_on:
+      customers-db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  # --- Tickets Service (Node.js / Express) ---
+  # Bounded Context: Gestión de Tickets/Incidencias
+  # Responsabilidad: CRUD de tickets, workflow de estados, Saga de asignación
+  tickets-service:
+    build:
+      context: ../services/tickets-service
+      dockerfile: Dockerfile
+    image: cs-platform/tickets-service:latest
+    restart: unless-stopped
+    networks:
+      - microservices-lab
+    environment:
+      SERVICE_NAME: tickets-service
+      DATABASE_URL: postgresql://tickets_svc:${TICKETS_DB_PASS:-tick_secret_2024}@tickets-db:5432/cs_tickets
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-cs_platform}:${RABBITMQ_PASS:-cs_platform_2024}@rabbitmq:5672/customer_service
+      LOG_LEVEL: info
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/health').then(r=>{if(!r.ok)throw r;process.exit(0)}).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    depends_on:
+      tickets-db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  # --- Knowledge Service (Go / Gin) ---
+  # Bounded Context: Base de Conocimiento
+  # Responsabilidad: CRUD de artículos y categorías de ayuda
+  knowledge-service:
+    build:
+      context: ../services/knowledge-service
+      dockerfile: Dockerfile
+    image: cs-platform/knowledge-service:latest
+    restart: unless-stopped
+    networks:
+      - microservices-lab
+    environment:
+      SERVICE_NAME: knowledge-service
+      DATABASE_URL: postgresql://knowledge_svc:${KNOWLEDGE_DB_PASS:-know_secret_2024}@knowledge-db:5432/cs_knowledge
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-cs_platform}:${RABBITMQ_PASS:-cs_platform_2024}@rabbitmq:5672/customer_service
+      LOG_LEVEL: info
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    depends_on:
+      knowledge-db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  # --- Notifications Service (Python / FastAPI) ---
+  # Bounded Context: Notificaciones
+  # Responsabilidad: Consume eventos y genera notificaciones
+  notifications-service:
+    build:
+      context: ../services/notifications-service
+      dockerfile: Dockerfile
+    image: cs-platform/notifications-service:latest
+    restart: unless-stopped
+    networks:
+      - microservices-lab
+    environment:
+      SERVICE_NAME: notifications-service
+      DATABASE_URL: postgresql://notifications_svc:${NOTIFICATIONS_DB_PASS:-noti_secret_2024}@notifications-db:5432/cs_notifications
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-cs_platform}:${RABBITMQ_PASS:-cs_platform_2024}@rabbitmq:5672/customer_service
+      LOG_LEVEL: INFO
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    depends_on:
+      notifications-db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  # --- Agents Service (Node.js / Express) ---
+  # Bounded Context: Gestión de Agentes de Soporte
+  # Responsabilidad: CRUD de agentes, disponibilidad, skills, carga de trabajo
+  agents-service:
+    build:
+      context: ../services/agents-service
+      dockerfile: Dockerfile
+    image: cs-platform/agents-service:latest
+    restart: unless-stopped
+    networks:
+      - microservices-lab
+    environment:
+      SERVICE_NAME: agents-service
+      DATABASE_URL: postgresql://agents_svc:${AGENTS_DB_PASS:-agen_secret_2024}@agents-db:5432/cs_agents
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-cs_platform}:${RABBITMQ_PASS:-cs_platform_2024}@rabbitmq:5672/customer_service
+      LOG_LEVEL: info
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/health').then(r=>{if(!r.ok)throw r;process.exit(0)}).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    depends_on:
+      agents-db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy

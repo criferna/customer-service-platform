@@ -1,0 +1,48 @@
+# =============================================================================
+# Docker Compose - Jenkins CI/CD Server
+# =============================================================================
+# Jenkins corre como contenedor aislado con acceso al Docker del host.
+# Esto permite que los pipelines construyan imágenes Docker directamente.
+#
+# PATRÓN: Automatización (Slide 21)
+#   - Despliegue automatizado
+#   - Testing automatizado
+#   - Infraestructura como código
+#
+# USO:
+#   cd infrastructure && docker compose -f docker-compose.jenkins.yml up -d
+#   Acceder: http://192.168.0.125:9080
+#   Password inicial: docker exec cs-jenkins cat /var/jenkins_home/secrets/initialAdminPassword
+# =============================================================================
+
+services:
+  jenkins:
+    image: jenkins/jenkins:lts-jdk17
+    container_name: cs-jenkins
+    restart: unless-stopped
+    ports:
+      - "9080:8080"     # Jenkins Web UI
+      - "50000:50000"   # Jenkins agent protocol
+    volumes:
+      # Persistir datos de Jenkins entre reinicios
+      - jenkins_home:/var/jenkins_home
+      # Montar Docker socket del host para que Jenkins pueda construir imágenes.
+      # Esto es "Docker-outside-of-Docker" (DooD): Jenkins usa el Docker del host.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Montar el binario de docker-compose del host
+      - /usr/bin/docker:/usr/bin/docker
+    environment:
+      # Deshabilitar wizard de setup (configurar vía IaC)
+      JAVA_OPTS: "-Djava.awt.headless=true -Djenkins.install.runSetupWizard=true"
+    # Ejecutar como root para acceder al Docker socket.
+    # En producción, se configuraría el grupo docker adecuadamente.
+    user: root
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/login"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
+volumes:
+  jenkins_home:

@@ -1,0 +1,148 @@
+# =============================================================================
+# Kong API Gateway - Configuración Declarativa (DB-less / IaC)
+# =============================================================================
+# Este archivo define todas las rutas del API Gateway como código.
+# Implementa el patrón API Gateway de la arquitectura de microservicios:
+#
+#   - Punto de entrada único para todos los clientes
+#   - Routing basado en path hacia cada microservicio
+#   - Rate Limiting para protección contra abuso
+#   - Correlation ID para tracing distribuido entre servicios
+#   - Load Balancing automático cuando hay múltiples instancias
+#
+# Kong resuelve los nombres de servicio via Docker DNS (red microservices-lab).
+# Cuando se escala un servicio (ej: --scale tickets-service=3), Docker DNS
+# retorna múltiples IPs y Kong distribuye la carga automáticamente.
+#
+# REFERENCIA: Slide 46 de la presentación — "Arquitectura tipo"
+#   Clientes → API Gateway → Microservicios
+# =============================================================================
+
+_format_version: "3.0"
+_transform: true
+
+# ------------------------------------------------------------------------------
+# SERVICIOS (backends)
+# Cada servicio apunta al hostname Docker del microservicio correspondiente.
+# El puerto es interno al contenedor (no expuesto al host).
+# ------------------------------------------------------------------------------
+services:
+
+  # --- Customers Service ---
+  - name: customers-service
+    url: http://customers-service:8000
+    tags: ["microservice", "customers"]
+    routes:
+      - name: customers-route
+        paths:
+          - /api/v1/customers
+        strip_path: false
+        tags: ["customers"]
+
+  # --- Tickets Service ---
+  - name: tickets-service
+    url: http://tickets-service:3000
+    tags: ["microservice", "tickets"]
+    routes:
+      - name: tickets-route
+        paths:
+          - /api/v1/tickets
+        strip_path: false
+        tags: ["tickets"]
+
+  # --- Knowledge Service ---
+  - name: knowledge-service
+    url: http://knowledge-service:8080
+    tags: ["microservice", "knowledge"]
+    routes:
+      - name: knowledge-route
+        paths:
+          - /api/v1/articles
+          - /api/v1/categories
+        strip_path: false
+        tags: ["knowledge"]
+
+  # --- Notifications Service ---
+  - name: notifications-service
+    url: http://notifications-service:8000
+    tags: ["microservice", "notifications"]
+    routes:
+      - name: notifications-route
+        paths:
+          - /api/v1/notifications
+        strip_path: false
+        tags: ["notifications"]
+
+  # --- Agents Service ---
+  - name: agents-service
+    url: http://agents-service:3000
+    tags: ["microservice", "agents"]
+    routes:
+      - name: agents-route
+        paths:
+          - /api/v1/agents
+        strip_path: false
+        tags: ["agents"]
+
+  # --- Health Aggregator ---
+  # Ruta especial que expone el health de cada servicio a través del gateway.
+  # Útil para monitoreo centralizado y dashboards.
+  - name: gateway-health
+    url: http://kong:8443
+    tags: ["infrastructure"]
+    routes:
+      - name: health-route
+        paths:
+          - /health
+        strip_path: true
+        tags: ["health"]
+
+# ------------------------------------------------------------------------------
+# PLUGINS GLOBALES
+# Se aplican a TODAS las rutas. Implementan cross-cutting concerns:
+#   - Correlation ID: tracing distribuido (Observabilidad - Slide 20)
+#   - Rate Limiting: resiliencia y protección (Resiliencia - Slide 19)
+#   - CORS: permite consumo desde cualquier cliente web
+# ------------------------------------------------------------------------------
+plugins:
+
+  # Inyecta X-Correlation-ID en cada request para rastreo entre servicios.
+  # Si el cliente ya envía uno, se respeta. Si no, Kong genera uno nuevo.
+  # Cada microservicio propaga este ID en sus logs y eventos.
+  - name: correlation-id
+    config:
+      header_name: X-Correlation-ID
+      generator: uuid#counter
+      echo_downstream: true
+
+  # Limita a 100 requests por minuto por IP.
+  # Protege los microservicios de sobrecarga (patrón Rate Limiting).
+  - name: rate-limiting
+    config:
+      minute: 100
+      policy: local
+      fault_tolerant: true
+      hide_client_headers: false
+
+  # Permite CORS desde cualquier origen (lab/desarrollo).
+  # En producción se restringiría a dominios específicos.
+  - name: cors
+    config:
+      origins:
+        - "*"
+      methods:
+        - GET
+        - POST
+        - PUT
+        - PATCH
+        - DELETE
+        - OPTIONS
+      headers:
+        - Content-Type
+        - Authorization
+        - X-Correlation-ID
+      exposed_headers:
+        - X-Correlation-ID
+        - X-RateLimit-Remaining
+      credentials: false
+      max_age: 3600

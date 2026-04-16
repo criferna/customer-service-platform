@@ -1,0 +1,166 @@
+{
+  "__comment__": [
+    "=============================================================================",
+    "RabbitMQ Pre-configured Definitions (IaC)",
+    "=============================================================================",
+    "Define exchanges, queues y bindings como código.",
+    "",
+    "TOPOLOGÍA DE EVENTOS:",
+    "",
+    "  Exchange 'domain.events' (topic)",
+    "    ├── customer.created  → queue: tickets.customer_events",
+    "    ├── customer.updated  → queue: tickets.customer_events",
+    "    ├── ticket.created    → queue: notifications.ticket_events",
+    "    │                     → queue: agents.ticket_events",
+    "    ├── ticket.assigned   → queue: notifications.ticket_events",
+    "    │                     → queue: agents.ticket_events",
+    "    ├── ticket.resolved   → queue: notifications.ticket_events",
+    "    │                     → queue: agents.ticket_events",
+    "    ├── agent.updated     → queue: tickets.agent_events",
+    "    └── agent.available   → queue: tickets.agent_events",
+    "",
+    "Cada queue tiene una Dead Letter Exchange (DLX) para mensajes fallidos.",
+    "Esto implementa el patrón de resiliencia: si un consumidor falla al",
+    "procesar un evento, el mensaje va a la DLX en vez de perderse.",
+    "============================================================================="
+  ],
+  "vhosts": [
+    {
+      "name": "customer_service"
+    }
+  ],
+  "users": [
+    {
+      "name": "cs_platform",
+      "password_hash": "cs_platform_2024",
+      "hashing_algorithm": "rabbit_password_hashing_sha256",
+      "tags": "administrator"
+    }
+  ],
+  "permissions": [
+    {
+      "user": "cs_platform",
+      "vhost": "customer_service",
+      "configure": ".*",
+      "write": ".*",
+      "read": ".*"
+    }
+  ],
+  "exchanges": [
+    {
+      "__comment": "Exchange principal para todos los eventos de dominio. Tipo 'topic' permite routing flexible con wildcards (ej: ticket.* matchea ticket.created, ticket.assigned, etc.)",
+      "name": "domain.events",
+      "vhost": "customer_service",
+      "type": "topic",
+      "durable": true,
+      "auto_delete": false
+    },
+    {
+      "__comment": "Dead Letter Exchange - aquí llegan los mensajes que fallan después de N reintentos. Permite inspección manual y reprocesamiento.",
+      "name": "domain.events.dlx",
+      "vhost": "customer_service",
+      "type": "topic",
+      "durable": true,
+      "auto_delete": false
+    }
+  ],
+  "queues": [
+    {
+      "__comment": "Tickets service escucha eventos de Customer (customer.created, customer.updated) para mantener su copia local de datos de cliente (patrón de desnormalización).",
+      "name": "tickets.customer_events",
+      "vhost": "customer_service",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-dead-letter-exchange": "domain.events.dlx",
+        "x-dead-letter-routing-key": "dlx.tickets.customer_events",
+        "x-message-ttl": 86400000
+      }
+    },
+    {
+      "__comment": "Tickets service escucha eventos de Agent para actualizar datos locales de agentes asignados.",
+      "name": "tickets.agent_events",
+      "vhost": "customer_service",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-dead-letter-exchange": "domain.events.dlx",
+        "x-dead-letter-routing-key": "dlx.tickets.agent_events",
+        "x-message-ttl": 86400000
+      }
+    },
+    {
+      "__comment": "Notifications service escucha eventos de Ticket para generar notificaciones automáticas a clientes y agentes.",
+      "name": "notifications.ticket_events",
+      "vhost": "customer_service",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-dead-letter-exchange": "domain.events.dlx",
+        "x-dead-letter-routing-key": "dlx.notifications.ticket_events",
+        "x-message-ttl": 86400000
+      }
+    },
+    {
+      "__comment": "Agents service escucha eventos de Ticket para actualizar contador de tickets activos y disponibilidad.",
+      "name": "agents.ticket_events",
+      "vhost": "customer_service",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-dead-letter-exchange": "domain.events.dlx",
+        "x-dead-letter-routing-key": "dlx.agents.ticket_events",
+        "x-message-ttl": 86400000
+      }
+    },
+    {
+      "__comment": "Dead letter queues para inspección de mensajes fallidos",
+      "name": "dlx.failed_events",
+      "vhost": "customer_service",
+      "durable": true,
+      "auto_delete": false
+    }
+  ],
+  "bindings": [
+    {
+      "__comment": "customer.* → tickets service (para datos desnormalizados)",
+      "source": "domain.events",
+      "vhost": "customer_service",
+      "destination": "tickets.customer_events",
+      "destination_type": "queue",
+      "routing_key": "customer.*"
+    },
+    {
+      "__comment": "agent.* → tickets service (para datos desnormalizados)",
+      "source": "domain.events",
+      "vhost": "customer_service",
+      "destination": "tickets.agent_events",
+      "destination_type": "queue",
+      "routing_key": "agent.*"
+    },
+    {
+      "__comment": "ticket.* → notifications service",
+      "source": "domain.events",
+      "vhost": "customer_service",
+      "destination": "notifications.ticket_events",
+      "destination_type": "queue",
+      "routing_key": "ticket.*"
+    },
+    {
+      "__comment": "ticket.* → agents service",
+      "source": "domain.events",
+      "vhost": "customer_service",
+      "destination": "agents.ticket_events",
+      "destination_type": "queue",
+      "routing_key": "ticket.*"
+    },
+    {
+      "__comment": "Todos los mensajes fallidos van a dlx.failed_events",
+      "source": "domain.events.dlx",
+      "vhost": "customer_service",
+      "destination": "dlx.failed_events",
+      "destination_type": "queue",
+      "routing_key": "#"
+    }
+  ]
+}

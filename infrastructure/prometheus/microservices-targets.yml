@@ -1,0 +1,43 @@
+# =============================================================================
+# Prometheus Scrape Targets - Microservicios
+# =============================================================================
+# Agregar este archivo como file_sd_configs en el Prometheus existente.
+# Cada servicio expone métricas en /metrics (formato Prometheus).
+#
+# PATRÓN: Observabilidad (Slide 20) - Métricas
+# =============================================================================
+
+- targets:
+    - "cs-platform-customers-service-1:8000"
+  labels:
+    service: customers-service
+    team: customer-platform
+    technology: python-fastapi
+
+- targets:
+    - "cs-platform-tickets-service-1:3000"
+  labels:
+    service: tickets-service
+    team: customer-platform
+    technology: nodejs-express
+
+- targets:
+    - "cs-platform-knowledge-service-1:8080"
+  labels:
+    service: knowledge-service
+    team: customer-platform
+    technology: go-gin
+
+- targets:
+    - "cs-platform-notifications-service-1:8000"
+  labels:
+    service: notifications-service
+    team: customer-platform
+    technology: python-fastapi
+
+- targets:
+    - "cs-platform-agents-service-1:3000"
+  labels:
+    service: agents-service
+    team: customer-platform
+    technology: nodejs-express

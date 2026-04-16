@@ -1,0 +1,39 @@
+# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+vendor/
+
+# Environment
+.env
+*.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build
+dist/
+build/
+*.egg-info/
+
+# Docker
+docker-compose.override.yml
+
+# Jenkins
+jenkins_home/
+
+# Logs
+*.log
+
+# Coverage
+coverage/
+htmlcov/
+.coverage
