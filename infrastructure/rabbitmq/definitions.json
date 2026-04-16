@@ -29,23 +29,8 @@
       "name": "customer_service"
     }
   ],
-  "users": [
-    {
-      "name": "cs_platform",
-      "password_hash": "cs_platform_2024",
-      "hashing_algorithm": "rabbit_password_hashing_sha256",
-      "tags": "administrator"
-    }
-  ],
-  "permissions": [
-    {
-      "user": "cs_platform",
-      "vhost": "customer_service",
-      "configure": ".*",
-      "write": ".*",
-      "read": ".*"
-    }
-  ],
+  "users": [],
+  "permissions": [],
   "exchanges": [
     {
       "__comment": "Exchange principal para todos los eventos de dominio. Tipo 'topic' permite routing flexible con wildcards (ej: ticket.* matchea ticket.created, ticket.assigned, etc.)",

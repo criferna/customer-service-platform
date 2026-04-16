@@ -90,7 +90,7 @@ services:
   #   - Modo DB-less: configuración declarativa (IaC)
   # ============================================================================
   kong:
-    image: kong:3.7-alpine
+    image: kong:3.9
     container_name: cs-kong
     restart: unless-stopped
     networks:
