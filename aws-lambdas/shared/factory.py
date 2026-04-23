@@ -74,7 +74,7 @@ class InternalNotifier(Notifier):
 
     def send(self, recipient: str, subject: str, body: str, metadata: dict = None) -> dict:
         logger.info(
-            f"[INTERNAL] Notification sent",
+            "[INTERNAL] Notification sent",
             extra={
                 "recipient": recipient,
                 "subject": subject,
@@ -98,7 +98,7 @@ class EmailNotifier(Notifier):
     def send(self, recipient: str, subject: str, body: str, metadata: dict = None) -> dict:
         # En producción: boto3.client('ses').send_email(...)
         logger.info(
-            f"[EMAIL] Would send email",
+            "[EMAIL] Would send email",
             extra={
                 "from": self.sender,
                 "to": recipient,

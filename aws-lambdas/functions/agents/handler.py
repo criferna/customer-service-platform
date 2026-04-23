@@ -161,7 +161,7 @@ def _update_agent(event, agent_id):
     correlation_id = event.get("correlation_id", "")
 
     # Ensure agent exists
-    agent = _get_agent(agent_id)
+    _get_agent(agent_id)
 
     # Build dynamic update expression from allowed fields
     allowed_fields = {"first_name", "last_name", "email", "max_tickets", "skills"}

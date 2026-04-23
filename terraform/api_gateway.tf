@@ -501,7 +501,6 @@ resource "aws_iam_role" "api_gateway_cloudwatch" {
 resource "aws_iam_role_policy_attachment" "api_gateway_cloudwatch" {
   role       = aws_iam_role.api_gateway_cloudwatch.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs"
-  # Nota: AWS resuelve el ARN automáticamente sin account ID para managed policies
 }
 
 # ===========================================================================
@@ -510,4 +509,3 @@ resource "aws_iam_role_policy_attachment" "api_gateway_cloudwatch" {
 # API Gateway con AWS_PROXY delega CORS al Lambda (ya incluido en _response()).
 # Para preflight OPTIONS sin Lambda, se necesitaría MOCK integration.
 # En este lab, el Lambda handler ya retorna los headers CORS correctos.
-}
