@@ -1,0 +1,160 @@
+# =============================================================================
+# CI/CD: Deploy Lambda Functions
+# =============================================================================
+# Se ejecuta cuando hay cambios en aws-lambdas/ o en este workflow.
+#
+# Flujo:
+#   1. PR abierto → lint + test (valida código Python)
+#   2. Merge a main → empaqueta y actualiza cada Lambda function
+#
+# Cada Lambda se empaqueta como ZIP con su handler + shared layer.
+# El deploy usa aws lambda update-function-code para actualizar el código.
+#
+# Requisitos:
+#   - GitHub Secret: AWS_ACCESS_KEY_ID
+#   - GitHub Secret: AWS_SECRET_ACCESS_KEY
+#   - GitHub Secret: AWS_REGION (opcional, default us-east-2)
+# =============================================================================
+
+name: Deploy Lambdas
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'aws-lambdas/**'
+      - '.github/workflows/deploy.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'aws-lambdas/**'
+      - '.github/workflows/deploy.yml'
+
+env:
+  AWS_REGION: ${{ secrets.AWS_REGION || 'us-east-2' }}
+  LAMBDA_PREFIX: lab-ms
+  PYTHON_VERSION: '3.12'
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Lint: validación de código Python
+  # ---------------------------------------------------------------------------
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install linting tools
+        run: pip install flake8
+
+      - name: Run flake8
+        working-directory: aws-lambdas
+        run: |
+          flake8 --max-line-length=120 --ignore=E501,W503 \
+            shared/ functions/
+
+  # ---------------------------------------------------------------------------
+  # Deploy: empaqueta y actualiza Lambdas
+  # ---------------------------------------------------------------------------
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+    needs: lint
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # -----------------------------------------------------------------------
+      # 1. Actualizar Lambda Layer (shared patterns)
+      # -----------------------------------------------------------------------
+      - name: Package shared layer
+        run: |
+          mkdir -p /tmp/layer/python/shared
+          cp -r aws-lambdas/shared/* /tmp/layer/python/shared/
+          cd /tmp/layer && zip -r /tmp/shared-layer.zip python/
+
+      - name: Publish shared layer
+        id: layer
+        run: |
+          LAYER_ARN=$(aws lambda publish-layer-version \
+            --layer-name "${LAMBDA_PREFIX}-shared-patterns" \
+            --zip-file fileb:///tmp/shared-layer.zip \
+            --compatible-runtimes python3.12 \
+            --query 'LayerVersionArn' --output text)
+          echo "layer_arn=$LAYER_ARN" >> $GITHUB_OUTPUT
+          echo "Published layer: $LAYER_ARN"
+
+      # -----------------------------------------------------------------------
+      # 2. Empaquetar y desplegar cada Lambda function
+      # -----------------------------------------------------------------------
+      - name: Deploy all Lambda functions
+        run: |
+          FUNCTIONS=(
+            "customers"
+            "tickets"
+            "agents"
+            "notifications"
+            "knowledge"
+            "notifications-consumer"
+            "tickets-consumer"
+            "agents-consumer"
+          )
+
+          for FUNC in "${FUNCTIONS[@]}"; do
+            echo "=== Deploying ${LAMBDA_PREFIX}-${FUNC} ==="
+
+            # Empaquetar handler
+            cd $GITHUB_WORKSPACE/aws-lambdas/functions/$FUNC
+            zip -r /tmp/${FUNC}.zip .
+
+            # Actualizar código
+            aws lambda update-function-code \
+              --function-name "${LAMBDA_PREFIX}-${FUNC}" \
+              --zip-file "fileb:///tmp/${FUNC}.zip" \
+              --no-cli-pager
+
+            # Esperar a que se estabilice
+            aws lambda wait function-updated \
+              --function-name "${LAMBDA_PREFIX}-${FUNC}"
+
+            # Actualizar layer
+            aws lambda update-function-configuration \
+              --function-name "${LAMBDA_PREFIX}-${FUNC}" \
+              --layers "${{ steps.layer.outputs.layer_arn }}" \
+              --no-cli-pager
+
+            echo "=== ${FUNC} deployed successfully ==="
+          done
+
+      # -----------------------------------------------------------------------
+      # 3. Verificación post-deploy
+      # -----------------------------------------------------------------------
+      - name: Verify deployments
+        run: |
+          FUNCTIONS=(
+            "customers" "tickets" "agents" "notifications"
+            "knowledge" "notifications-consumer" "tickets-consumer"
+            "agents-consumer"
+          )
+
+          echo "=== Lambda Function Status ==="
+          for FUNC in "${FUNCTIONS[@]}"; do
+            STATUS=$(aws lambda get-function \
+              --function-name "${LAMBDA_PREFIX}-${FUNC}" \
+              --query 'Configuration.{State:State,LastModified:LastModified}' \
+              --output text 2>/dev/null || echo "NOT_FOUND")
+            echo "${LAMBDA_PREFIX}-${FUNC}: ${STATUS}"
+          done

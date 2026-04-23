@@ -1,0 +1,12 @@
+# =============================================================================
+# Variables de configuración - copiar como terraform.tfvars
+# =============================================================================
+
+aws_region          = "us-east-2"
+environment         = "dev"
+prefix              = "lab-ms"
+lambda_runtime      = "python3.12"
+lambda_timeout      = 30
+lambda_memory       = 128
+notification_channel = "INTERNAL"    # INTERNAL | EMAIL | SNS
+assignment_strategy  = "LEAST_LOADED" # LEAST_LOADED | ROUND_ROBIN | SKILL_BASED
