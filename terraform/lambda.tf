@@ -144,7 +144,6 @@ resource "aws_cloudwatch_log_group" "agents_consumer" {
 # ---------------------------------------------------------------------------
 locals {
   common_env = {
-    AWS_REGION              = var.aws_region
     DOMAIN_EVENTS_TOPIC_ARN = aws_sns_topic.domain_events.arn
     NOTIFICATION_CHANNEL    = var.notification_channel
     ASSIGNMENT_STRATEGY     = var.assignment_strategy
