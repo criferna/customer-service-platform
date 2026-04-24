@@ -3,4 +3,3 @@
 *.tfstate.backup
 *.tfplan
 .build/
-.terraform.lock.hcl

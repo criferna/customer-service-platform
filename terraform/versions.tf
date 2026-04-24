@@ -20,15 +20,13 @@ terraform {
     }
   }
 
-  # Backend S3 para estado remoto (compartido en CI/CD)
-  # Descomenta esto cuando el bucket exista:
-  # backend "s3" {
-  #   bucket         = "lab-ms-terraform-state"
-  #   key            = "customer-service-platform/terraform.tfstate"
-  #   region         = "us-east-2"
-  #   dynamodb_table = "lab-ms-terraform-locks"
-  #   encrypt        = true
-  # }
+  backend "s3" {
+    bucket         = "lab-ms-terraform-state"
+    key            = "customer-service-platform/terraform.tfstate"
+    region         = "us-east-2"
+    dynamodb_table = "lab-ms-terraform-locks"
+    encrypt        = true
+  }
 }
 
 provider "aws" {
