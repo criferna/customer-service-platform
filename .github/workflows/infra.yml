@@ -1,11 +1,12 @@
 # =============================================================================
 # CI/CD: Infrastructure (Terraform)
 # =============================================================================
-# Se ejecuta cuando hay cambios en terraform/ o en este workflow.
+# Se ejecuta cuando hay cambios en terraform/, aws-lambdas/shared/,
+# o en este workflow.
 #
 # Flujo:
-#   1. PR abierto → terraform plan (muestra cambios como comentario en PR)
-#   2. Merge a main → terraform apply (aplica cambios automáticamente)
+#   1. PR abierto -> terraform plan (muestra cambios como comentario en PR)
+#   2. Merge a main -> terraform apply (aplica cambios automaticamente)
 #
 # Requisitos:
 #   - GitHub Secret: AWS_ACCESS_KEY_ID
@@ -20,11 +21,13 @@ on:
     branches: [main]
     paths:
       - 'terraform/**'
+      - 'aws-lambdas/**'
       - '.github/workflows/infra.yml'
   pull_request:
     branches: [main]
     paths:
       - 'terraform/**'
+      - 'aws-lambdas/**'
       - '.github/workflows/infra.yml'
 
 permissions:
@@ -33,11 +36,11 @@ permissions:
 
 env:
   TF_VERSION: '1.7.0'
-  AWS_REGION: ${{ secrets.AWS_REGION || 'us-east-2' }}
+  AWS_REGION: us-east-2
 
 jobs:
   # ---------------------------------------------------------------------------
-  # Validate: formato y validación sintáctica
+  # Validate: formato y validacion sintactica
   # ---------------------------------------------------------------------------
   validate:
     name: Validate
@@ -48,6 +51,12 @@ jobs:
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Build Lambda packages
+        run: |
+          # Shared layer: requiere estructura python/shared/
+          mkdir -p terraform/.build/layer/python/shared
+          cp aws-lambdas/shared/*.py terraform/.build/layer/python/shared/
 
       - name: Terraform fmt
         working-directory: terraform
@@ -60,59 +69,6 @@ jobs:
       - name: Terraform validate
         working-directory: terraform
         run: terraform validate
-
-  # ---------------------------------------------------------------------------
-  # Plan: muestra qué cambios se van a aplicar
-  # ---------------------------------------------------------------------------
-  plan:
-    name: Plan
-    runs-on: ubuntu-latest
-    needs: validate
-    if: github.event_name == 'pull_request'
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: ${{ env.TF_VERSION }}
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Terraform init
-        working-directory: terraform
-        run: terraform init
-
-      - name: Terraform plan
-        id: plan
-        working-directory: terraform
-        run: terraform plan -no-color -out=tfplan
-        continue-on-error: true
-
-      - name: Comment PR with plan
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const output = `#### Terraform Plan 📖
-            \`\`\`
-            ${{ steps.plan.outputs.stdout }}
-            \`\`\`
-            *Pushed by: @${{ github.actor }}, Action: \`${{ github.event_name }}\`*`;
-
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: output
-            })
-
-      - name: Fail if plan failed
-        if: steps.plan.outcome == 'failure'
-        run: exit 1
 
   # ---------------------------------------------------------------------------
   # Apply: aplica cambios en main
@@ -137,6 +93,12 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
+      - name: Build Lambda packages
+        run: |
+          # Shared layer
+          mkdir -p terraform/.build/layer/python/shared
+          cp aws-lambdas/shared/*.py terraform/.build/layer/python/shared/
+
       - name: Terraform init
         working-directory: terraform
         run: terraform init
@@ -144,3 +106,61 @@ jobs:
       - name: Terraform apply
         working-directory: terraform
         run: terraform apply -auto-approve
+
+  # ---------------------------------------------------------------------------
+  # Plan: muestra que cambios se van a aplicar (solo en PRs)
+  # ---------------------------------------------------------------------------
+  plan:
+    name: Plan
+    runs-on: ubuntu-latest
+    needs: validate
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Build Lambda packages
+        run: |
+          mkdir -p terraform/.build/layer/python/shared
+          cp aws-lambdas/shared/*.py terraform/.build/layer/python/shared/
+
+      - name: Terraform init
+        working-directory: terraform
+        run: terraform init
+
+      - name: Terraform plan
+        id: plan
+        working-directory: terraform
+        run: terraform plan -no-color -out=tfplan
+        continue-on-error: true
+
+      - name: Comment PR with plan
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const output = `#### Terraform Plan
+            \`\`\`
+            ${{ steps.plan.outputs.stdout }}
+            \`\`\`
+            *Pushed by: @${{ github.actor }}, Action: \`${{ github.event_name }}\`*`;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            })
+
+      - name: Fail if plan failed
+        if: steps.plan.outcome == 'failure'
+        run: exit 1

@@ -9,32 +9,12 @@
 # Lambda Layer: shared patterns (Singleton, Factory, Decorator, Observer, Strategy)
 # ---------------------------------------------------------------------------
 # Lambda layers requieren estructura python/shared/ para ser importables.
-# Usamos null_resource para crear la estructura correcta antes de empaquetar.
+# El directorio .build/layer se prepara ANTES de terraform (ver infra.yml).
 # ---------------------------------------------------------------------------
-resource "null_resource" "build_shared_layer" {
-  triggers = {
-    # Rebuild cuando cambie cualquier archivo en shared/
-    source_hash = sha1(join("", [
-      for f in fileset("${path.module}/../aws-lambdas/shared", "*.py") :
-      filesha1("${path.module}/../aws-lambdas/shared/${f}")
-    ]))
-  }
-
-  provisioner "local-exec" {
-    command = <<-EOT
-      rm -rf ${path.module}/.build/layer
-      mkdir -p ${path.module}/.build/layer/python/shared
-      cp ${path.module}/../aws-lambdas/shared/*.py ${path.module}/.build/layer/python/shared/
-      cd ${path.module}/.build/layer && zip -r ../shared-layer.zip python/
-    EOT
-  }
-}
-
 data "archive_file" "shared_layer" {
   type        = "zip"
   source_dir  = "${path.module}/.build/layer"
   output_path = "${path.module}/.build/shared-layer.zip"
-  depends_on  = [null_resource.build_shared_layer]
 }
 
 resource "aws_lambda_layer_version" "shared" {
